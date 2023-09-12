@@ -1,0 +1,286 @@
+'''
+This script is adapted for Google Colab to take advantage of its cloud-based environment,
+
+which offers convenient access to GPU resources for accelerated machine learning tasks.
+
+Some configurations or dependencies may be specific to the Colab environment.
+
+'''
+
+import pretty_midi
+import numpy as np
+from tensorflow.keras.layers import LSTM, Dense, Input
+from tensorflow.keras.models import Model
+import random
+from google.colab import files
+
+# This script demonstrates music generation using a recurrent neural network (RNN)
+# trained on MIDI files. It allows customization by uploading 4-5 MIDI files of your choice.
+
+
+'''
+RNNs are not a new approach to music generation, however I have added customizable and
+
+unique elements to improve the variability, complexity and coherency of the music
+
+generated that can be further experimented with.
+
+'''
+
+
+def generate_music(midi_files):
+
+      """
+    Generate music using a trained RNN model.
+
+    Parameters:
+    - midi_files (list): List of paths to MIDI files used for training.
+
+    Returns:
+    - generated_midi_path (str): Path to the generated MIDI file.
+    """
+
+    # Concatenate the notes from all MIDI files into a single list
+    notes = []
+
+    for midi_file in midi_files:
+        # Load the MIDI file using pretty_midi
+        midi_data = pretty_midi.PrettyMIDI(midi_file)
+
+        # Extract the notes from the MIDI file
+        for instrument in midi_data.instruments:
+            for note in instrument.notes:
+                notes.append(note)
+
+    print("Total number of notes extracted:", len(notes)) # Sanity check that notes are being extracted, can comment out
+
+    # Preprocess the notes and create the input and target sequences
+    unique_pitches = sorted(set(note.pitch for note in notes))
+    pitch_to_idx = {pitch: i for i, pitch in enumerate(unique_pitches)}
+    idx_to_pitch = {i: pitch for i, pitch in enumerate(unique_pitches)}
+
+    # These ranges worked best for the Grateful Dead music I trained the RNN model on, but can be customized
+    
+    # Set the sequence length range
+    min_seq_length = 120  # Minimum length of input sequences
+    max_seq_length = 800  # Maximum length of input sequences
+    # Set the note duration range
+    min_duration = 0.25  # Minimum duration of generated notes
+    max_duration = 2.0  # Maximum duration of generated notes
+
+    # Randomly select the sequence length
+    seq_length = random.randint(min_seq_length, max_seq_length)
+
+     """
+    Originality/Uniqueness: I chose to randomly select the sequence
+
+    length for the input sequence to add an element of unpredictability
+
+    and creativity to the music generation process. This dynamic sequence
+
+    length allows for the generation of music with varying structures
+
+    and rhythms, making each composition unique. It encourages
+
+    experimentation and can result in music with unexpected patterns.
+
+     """
+
+    # Create overlapping input sequences
+    input_sequences = []
+    target_sequences = []
+    duration_sequences = []
+     
+     """
+    This helps to capture context in that it can capture longer-term dependencies.
+    
+    Using overlapping input sequences ensures important patterns are not missed
+    
+    since the context can span multipe time steps. This method also helps to smooth
+    
+    transitions between inputs, which reduces abrupt changes in the output.
+
+     """
+
+    for i in range(len(notes) - seq_length - 1):
+        
+         """
+        Originality/Uniqueness: I chose to dynamically select the sequence length
+
+        within a specified range to introduce more variability in the input sequences,
+
+        potentially resulting in more diverse music generation.
+          
+         """
+
+        input_sequence = [pitch_to_idx[note.pitch] for note in notes[i:i+seq_length]]
+        target_sequence = pitch_to_idx[notes[i+seq_length].pitch]
+
+         """
+        Originality/Uniqueness: I incorperated the prediction of note duration
+
+        sequences in addition to the more common pitch sequence prediction so the
+
+        model can simultaneously capture both the melodic and rythmic aspects of the
+
+        music, potentialy capturing more expressive/ human-like compositions.
+
+         """
+
+        duration_sequence = [np.random.uniform(min_duration, max_duration) for _ in range(seq_length)]
+
+        input_sequences.append(input_sequence)
+        target_sequences.append(target_sequence)
+        duration_sequences.append(duration_sequence)
+
+    # Convert input and target sequences to numpy arrays
+    X = np.array(input_sequences)
+    y = np.array(target_sequences)
+    d = np.array(duration_sequences)
+    print("Input sequences shape:", X.shape)
+    print("Target sequences shape:", y.shape)
+
+    # Reshape X to match the expected shape
+    X = np.reshape(X, (X.shape[0], seq_length, 1))
+
+    # Define the input layers
+    input_layer = Input(shape=(seq_length, 1))
+    duration_input_layer = Input(shape=(seq_length,))
+
+    # Define the LSTM model
+    rnn_units = 64  # Number of RNN units 
+
+    '''
+    Customizing the RNN unit Number, tips for editing:
+
+    
+    Low Capacity (e.g., 32 units):
+
+    - Suitable for quick experimentation and testing.
+
+    - May produce simpler and less expressive music.
+
+    - Faster training times.
+
+
+    Moderate Capacity (e.g., 64 units, which is the current setting):
+
+    - A good balance between model complexity and training time.
+
+    - Suitable for most use cases.
+
+    - Can generate reasonably complex music.
+
+
+    High Capacity (e.g., 128 units or more):
+
+    - Suitable for users who want to generate highly complex and expressive music.
+
+    - Longer training times, but potentially better performance.
+
+    - May require more training data to prevent overfitting.
+
+'''
+
+    lstm_layer = LSTM(rnn_units)(input_layer)
+    output_layer = Dense(len(unique_pitches), activation='softmax')(lstm_layer)
+
+    # Create the model
+    model = Model(inputs=input_layer, outputs=output_layer)
+
+    # Compile the model
+    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy')
+
+    # Train the model with reduced values
+    batch_size = 32  # Reduced batch size for quicker training, increase as desired to improve performance
+    num_epochs = 10  # Reduced number of epochs for quicker training,  increase as desired to improve performance
+    model.fit(X, y, batch_size=batch_size, epochs=num_epochs)
+
+    # Generate music using the trained model
+    start_index = np.random.randint(0, len(notes) - seq_length - 1)
+    seed = [pitch_to_idx[note.pitch] for note in notes[start_index:start_index+seq_length]]
+    generated_notes = []
+    total_duration = 0  # Track the total duration of the generated music
+    max_notes = 50  # Maximum number of notes to generate, can increase if desired
+
+    while len(generated_notes) < max_notes and total_duration < 90: # Duration can be changed as desired
+        x_pred = np.reshape(seed, (1, seq_length, 1))  # Reshape the input sequence
+
+        predictions = model.predict(x_pred)[0]
+
+        # Apply the temperature adjustment
+        temperature = 1.5 
+       
+        '''
+        temp value of 1.5 means a temp adjustment of 1.5 to the model's preidctions will
+
+        be applied to create a moderate amount of randomness in the generation of the next note.
+       
+        '''
+
+        predictions = np.log(predictions) / temperature 
+        predictions = np.exp(predictions) / np.sum(np.exp(predictions))  # Temperature scaling applied to the model's predictions
+
+
+        predicted_idx = np.random.choice(range(len(unique_pitches)), p=predictions) # Stochastic sampling strategy to ensure some randomness
+        predicted_pitch = idx_to_pitch[predicted_idx]
+        generated_notes.append(predicted_pitch)
+        seed.append(predicted_idx) # Sequential generation approach maintains context and coherency in the generated music
+        seed = seed[1:]
+
+        # Generate a random duration between the defined range
+        note_duration = np.random.uniform(min_duration, max_duration)
+
+        # Update the total duration
+        total_duration += note_duration
+
+    # Create a new PrettyMIDI object
+    generated_midi_data = pretty_midi.PrettyMIDI()
+
+    # Create a new instrument: customize to instrument of choice
+    instrument = pretty_midi.Instrument(program=0)  # Change the program number as needed
+
+    # Add the generated notes to the instrument
+    current_time = 0
+    for pitch in generated_notes:
+        note = pretty_midi.Note(
+            velocity=100,  # Adjust the velocity as desired: This is the loudness (typically ranges from 0 which is no sound to 127 which is max volume)
+            pitch=pitch,
+            start=current_time,
+            end=current_time + note_duration
+        )
+        instrument.notes.append(note)
+        current_time += note_duration
+
+        '''
+
+      Further work suggestion: instead of using a contant velocity, experiment with having a variable velocity
+
+      to improve the expressiveness and realism of your generated music.
+
+      '''
+
+    # Add the instrument to the MIDI data
+    generated_midi_data.instruments.append(instrument)
+
+    # Save the generated MIDI file
+    generated_midi_path = "/content/generated_music.mid"
+    generated_midi_data.write(generated_midi_path)
+
+    return generated_midi_path
+
+# Prompt the user to upload the MIDI files
+uploaded = files.upload()
+
+# Access the uploaded MIDI file paths
+file_paths = list(uploaded.keys())
+
+# Generate random inspired music using an RNN and save it as a MIDI file
+generated_midi_file = generate_music(file_paths)
+
+# Provide the path of the generated MIDI file for download
+print("Generated MIDI file:", generated_midi_file)
+
+'''
+
+To listen to MIDI files, some common and easy tools are Digital Audio Workstations (Daws) like Ableton Live, Logic Pro, Pro Tools, FL Studio, etc.
